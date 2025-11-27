@@ -1,0 +1,230 @@
+============================================
+
+Comandos usados practica 1
+
+--------NODO 1 (192.168.100.168)------------
+sudo su
+mkdir /home/fred/Escritorio/sync_folder
+cd /home/Fred/Escritorio/sync_folder
+touch archivo_{001..100}.txt
+ls
+
+--------NODO 2 (192.168.100.169)------------
+sudo su
+
+mkdir 
+/home/fred/Escritorio/sync_folder_backup
+cd /home/Fred/Escritorio/sync_folder_backup
+
+--------NODO 1 (192.168.100.168)------------
+
+ssh-keygen
+ssh-copy-id fred@192.168.100.169
+
+exit
+
+dnf install rsync 
+
+--------NODO 2 (192.168.100.169)------------
+
+dnf install rsync 
+
+--------NODO 1 (192.168.100.168)------------
+
+rsync -avz /home/fred/Escritorio/sync_folder/ fred@192.168.100.169:/home/Fred/Escritorio/sync_folder_backup/
+
+--------NODO 2 (192.168.100.169)------------
+(Comprobamos que se sincronizo)
+ls
+
+--------NODO 1 (192.168.100.168)------------
+
+cd .. 
+nano rsync.ssh
+
+--------(DENTRO DEL NANO)------------
+#!/bin/bash
+
+rsync -avz /home/fred/Escritorio/sync_folder/ fred@192.168.100.169:/home/Fred/Escritorio/sync_folder_backup/
+
+-------------------------------------
+
+crontab -e
+
+--------(DENTRO DE CRONTAB)------------
+
+* * * * * rsync -avz /home/fred/Escritorio/sync_folder/ fred@192.168.100.169:/home/Fred/Escritorio/sync_folder_backup/
+
+--------------------------------------
+
+cd /home/Fred/Escritorio/sync_folder
+touch adrianponme100{01..30}.txt
+
+--------NODO 2 (192.168.100.169)------------
+(Esperamos 1 minuto para que se haga la sincronizacion)
+
+cd /home/Fred/Escritorio/sync_folder_backup
+ls
+
+
+
+
+============================================
+
+Comandos usados practica 2
+
+--------------AMBOS NODOS--------------------
+sudo su
+
+sudo dnf --enablerepo=highavailability install pacemaker corosync pcs resource-agents fence-agents-all -y
+
+systemctl enable --now pcs
+sudo passwd hacluster
+
+--------CUALQUIERA DE NODOS (NO AMBOS)-------
+
+sudo pcs host auth fredserver1 fredserver2
+
+sudo pcs cluster setup fredcluster fredserver1 addr=192.168.100.168 fredserver2 addr=192.168.100.169
+
+sudo pcs cluster start --all
+sudo pcs cluster enable --all
+
+pcs property set stonith-enabled=false
+
+sudo pcs status
+
+{IP FLOTANTE}
+
+sudo pcs resource create ClusterIP ocf:heartbeat:IPaddr2 ip="192.168.100.200" cidr_netmask="24" nic="ens33" op monitor interval=30s
+
+EN CASO DE SER NECESARIO
+
+sudo pcs destroy --all cluster
+
+
+
+
+============================================
+
+Comandos usados practica 3
+
+sudo su
+dnf install httpd keepalived httpd
+
+systemctl enable --now httpd keepalived
+systemctl status httpd keepalived
+
+firewall cmd --permanent --add-service=http
+firewall-cmd --permanent --add-protocol=vrrp
+
+nano /etc/httpd/conf/httpd.conf
+
+---------VERIFICAR QUE SE ESTE ESCUCHANDO EL PUERTO 80 EN AMBOS SERVIDORES-----
+Listen 80
+-----------------------------------------------------------
+
+nano /etc/keepalived//keepalived.conf
+
+((Borra desde el principio hasta justo antes donde diga virtual_server 192.168.100.443))
+((poner al principio lo siguiente))
+global_defs {
+    router_id fredserver1
+}
+
+vrrp_instance VI_1 {
+    state MASTER
+    interface ens33        
+    virtual_router_id 51
+    priority 100
+    advert_int 1
+    authentication {
+        auth_type PASS
+        auth_pass clave123
+    }
+    virtual_ipaddress {
+        192.168.100.200/24 
+    }
+}
+--------------------------------------------------------------
+En el segundo servidor configurar
+
+global_defs {
+    router_id fredserver2
+}
+
+vrrp_instance VI_1 {
+    state BACKUP
+    interface ens33        
+    virtual_router_id 51
+    priority 50
+    advert_int 1
+    authentication {
+        auth_type PASS
+        auth_pass clave123
+    }
+    virtual_ipaddress {
+        192.168.100.200/24 
+    }
+}
+----------------------------------------------------------------
+
+cd /var/www/html
+
+nano index.html
+--------------(NANO INDEX.HTML FREDSERVER1)---------------------
+<!DOCTYPE html>
+<html>
+<head>
+    <title>Cluster HA - Server 1</title>
+    <meta charset="UTF-8">
+    <style>
+        body { font-family: Arial, sans-serif; text-align: center; margin-top: 100px; background-color: #f0f8ff; }
+        h1 { color: #007bff; border: 2px solid #007bff; padding: 15px; display: inline-block; border-radius: 10px; }
+        p { font-size: 1.2em; }
+    </style>
+</head>
+<body>
+    <h1>🚀 SERVIDOR WEB 1 (MASTER) - ACTIVO 🚀</h1>
+    <p>El servicio de Alta Disponibilidad está siendo entregado por este servidor.</p>
+    <p>Accediendo a través de la IP Virtual: 192.168.100.200</p>
+</body>
+</html>
+--------------(NANO INDEX.HTML FREDSERVER2)---------------------
+
+<!DOCTYPE html>
+<html>
+<head>
+    <title>Cluster HA - Server 2</title>
+    <meta charset="UTF-8">
+    <style>
+        body { font-family: Arial, sans-serif; text-align: center; margin-top: 100px; background-color: #f0fff0; }
+        h1 { color: #28a745; border: 2px solid #28a745; padding: 15px; display: inline-block; border-radius: 10px; }
+        p { font-size: 1.2em; }
+    </style>
+</head>
+<body>
+    <h1>💾 SERVIDOR WEB 2 (BACKUP) - EN ESPERA 💾</h1>
+    <p>¡Activado! El failover fue exitoso. Este nodo ha tomado la IP Virtual.</p>
+    <p>Accediendo a través de la IP Virtual: 192.168.100.200</p>
+</body>
+</html>
+----------------------------------------------------------------
+
+systemctl restart httpd
+systemctl enable --now httpd
+systemctl restart keepalived.service
+systemctl enable --now keepalived.service
+
+systemctl status httpd
+systemctl status keepalived.service
+
+# PRUEBAS
+
+mientras se muestra el ping constante desde la maquina host con
+ping 192.168.100.200
+
+abrir la pagina web
+
+apagar una de las maquinas y chequear tanto la pagina como el ping para comprobar
+la disponibilidad del servidor.
