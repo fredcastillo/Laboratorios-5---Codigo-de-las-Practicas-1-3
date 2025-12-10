@@ -1,3 +1,288 @@
+
+# ============================================================
+# MÓDULO V — Rsync y Cluster de Alta Disponibilidad (CentOS Stream 10)
+# ============================================================
+
+
+# ============================================================
+# PRACTICA 1 — Sincronización de Carpetas con Rsync
+# ============================================================
+
+# --------NODO 1 (192.168.100.168)------------
+sudo su
+mkdir /home/fred/Escritorio/sync_folder
+cd /home/Fred/Escritorio/sync_folder
+touch archivo_{001..100}.txt
+ls
+
+# --------NODO 2 (192.168.100.169)------------
+sudo su
+mkdir /home/fred/Escritorio/sync_folder_backup
+cd /home/Fred/Escritorio/sync_folder_backup
+
+# --------NODO 1 (192.168.100.168)------------
+ssh-keygen
+ssh-copy-id fred@192.168.100.169
+exit
+dnf install rsync
+
+# --------NODO 2 (192.168.100.169)------------
+dnf install rsync
+
+# --------NODO 1 (192.168.100.168)------------
+rsync -avz /home/fred/Escritorio/sync_folder/ fred@192.168.100.169:/home/Fred/Escritorio/sync_folder_backup/
+
+# --------NODO 2 (192.168.100.169)------------
+ls
+
+# --------NODO 1 (192.168.100.168)------------
+cd ..
+nano rsync.ssh
+
+# --------- Contenido del script rsync.ssh ----------
+#!/bin/bash
+rsync -avz /home/fred/Escritorio/sync_folder/ fred@192.168.100.169:/home/Fred/Escritorio/sync_folder_backup/
+# ---------------------------------------------------
+
+crontab -e
+
+# --------- Contenido del crontab ----------
+* * * * * rsync -avz /home/fred/Escritorio/sync_folder/ fred@192.168.100.169:/home/Fred/Escritorio/sync_folder_backup/
+# ---------------------------------------------------
+
+cd /home/Fred/Escritorio/sync_folder
+touch adrianponme100{01..30}.txt
+
+# --------NODO 2 (192.168.100.169)------------
+cd /home/Fred/Escritorio/sync_folder_backup
+ls
+
+
+# -------------------------
+# ❗ NOTAS, ERRORES Y SOLUCIONES (Práctica 1)
+# -------------------------
+
+❗ Nota 1 — Rsync no copia archivos  
+- Solución: Verificar conectividad y autenticación SSH entre nodos  
+- ssh fred@192.168.100.169
+
+❗ Nota 2 — Crontab no ejecuta  
+- Solución: Verificar que el script tenga permisos de ejecución: chmod +x rsync.ssh
+
+❗ Nota 3 — Archivos duplicados o permisos incorrectos  
+- Solución: Usar opción -avz y revisar propietario y permisos en destino
+
+
+# -------------------------
+# 📘 TÉRMINOS IMPORTANTES (Práctica 1)
+# -------------------------
+
+rsync: Herramienta para sincronización de archivos entre sistemas Linux.  
+crontab: Programa para automatizar tareas en Linux.  
+SSH-Keygen: Genera llave pública/privada para autenticación sin contraseña.  
+touch: Comando para crear archivos vacíos.  
+-avz: Opciones de rsync que preservan permisos, muestran progreso y comprimen datos.
+
+
+# ============================================================
+# PRACTICA 2 — Instalación y Configuración de Cluster HA
+# ============================================================
+
+# --------------AMBOS NODOS--------------------
+sudo su
+sudo dnf --enablerepo=highavailability install pacemaker corosync pcs resource-agents fence-agents-all -y
+systemctl enable --now pcs
+sudo passwd hacluster
+
+# --------CUALQUIERA DE NODOS (NO AMBOS)-------
+sudo pcs host auth fredserver1 fredserver2
+sudo pcs cluster setup fredcluster fredserver1 addr=192.168.100.168 fredserver2 addr=192.168.100.169
+sudo pcs cluster start --all
+sudo pcs cluster enable --all
+pcs property set stonith-enabled=false
+sudo pcs status
+
+# --------IP FLOTANTE--------
+sudo pcs resource create ClusterIP ocf:heartbeat:IPaddr2 ip="192.168.100.200" cidr_netmask="24" nic="ens33" op monitor interval=30s
+
+# EN CASO DE SER NECESARIO
+sudo pcs destroy --all cluster
+
+
+# -------------------------
+# ❗ NOTAS, ERRORES Y SOLUCIONES (Práctica 2)
+# -------------------------
+
+❗ Nota 1 — Cluster no arranca  
+- Solución: Verificar que pcsd esté activo en ambos nodos  
+  systemctl status pcsd
+
+❗ Nota 2 — IP flotante no responde  
+- Solución: Revisar NIC correcta, subnet y configuración del recurso IPaddr2
+
+❗ Nota 3 — Error de autenticación entre nodos  
+- Solución: Ejecutar pcs host auth en un solo nodo y usar mismo password
+
+❗ Nota 4 — Cluster no sincroniza recursos  
+- Solución: pcs cluster stop --all y pcs cluster start --all
+
+
+# -------------------------
+# 📘 TÉRMINOS IMPORTANTES (Práctica 2)
+# -------------------------
+
+Pacemaker: Gestor de clúster de alta disponibilidad.  
+Corosync: Comunicación entre nodos de clúster.  
+PCS: Comando de configuración y administración de clúster.  
+STONITH: Protección contra fallos de nodo (“Shoot The Other Node In The Head”).  
+IPaddr2: Recurso de IP flotante en HA Linux.
+
+
+# ============================================================
+# PRACTICA 3 — Cluster HA HTTP con KeepAlived
+# ============================================================
+
+sudo su
+dnf install httpd keepalived httpd
+systemctl enable --now httpd keepalived
+systemctl status httpd keepalived
+
+firewall cmd --permanent --add-service=http
+firewall-cmd --permanent --add-protocol=vrrp
+
+nano /etc/httpd/conf/httpd.conf
+
+# --------- Verificar puerto 80 --------
+Listen 80
+
+nano /etc/keepalived/keepalived.conf
+
+# --------Servidor 1 (MASTER) --------
+global_defs {
+    router_id fredserver1
+}
+
+vrrp_instance VI_1 {
+    state MASTER
+    interface ens33        
+    virtual_router_id 51
+    priority 100
+    advert_int 1
+    authentication {
+        auth_type PASS
+        auth_pass clave123
+    }
+    virtual_ipaddress {
+        192.168.100.200/24 
+    }
+}
+
+# --------Servidor 2 (BACKUP) --------
+global_defs {
+    router_id fredserver2
+}
+
+vrrp_instance VI_1 {
+    state BACKUP
+    interface ens33        
+    virtual_router_id 51
+    priority 50
+    advert_int 1
+    authentication {
+        auth_type PASS
+        auth_pass clave123
+    }
+    virtual_ipaddress {
+        192.168.100.200/24 
+    }
+}
+
+cd /var/www/html
+
+# --------Index.html Servidor 1----------
+nano index.html
+<!DOCTYPE html>
+<html>
+<head>
+    <title>Cluster HA - Server 1</title>
+    <meta charset="UTF-8">
+    <style>
+        body { font-family: Arial, sans-serif; text-align: center; margin-top: 100px; background-color: #f0f8ff; }
+        h1 { color: #007bff; border: 2px solid #007bff; padding: 15px; display: inline-block; border-radius: 10px; }
+        p { font-size: 1.2em; }
+    </style>
+</head>
+<body>
+    <h1>🚀 SERVIDOR WEB 1 (MASTER) - ACTIVO 🚀</h1>
+    <p>El servicio de Alta Disponibilidad está siendo entregado por este servidor.</p>
+    <p>Accediendo a través de la IP Virtual: 192.168.100.200</p>
+</body>
+</html>
+
+# --------Index.html Servidor 2----------
+nano index.html
+<!DOCTYPE html>
+<html>
+<head>
+    <title>Cluster HA - Server 2</title>
+    <meta charset="UTF-8">
+    <style>
+        body { font-family: Arial, sans-serif; text-align: center; margin-top: 100px; background-color: #f0fff0; }
+        h1 { color: #28a745; border: 2px solid #28a745; padding: 15px; display: inline-block; border-radius: 10px; }
+        p { font-size: 1.2em; }
+    </style>
+</head>
+<body>
+    <h1>💾 SERVIDOR WEB 2 (BACKUP) - EN ESPERA 💾</h1>
+    <p>¡Activado! El failover fue exitoso. Este nodo ha tomado la IP Virtual.</p>
+    <p>Accediendo a través de la IP Virtual: 192.168.100.200</p>
+</body>
+</html>
+
+systemctl restart httpd
+systemctl enable --now httpd
+systemctl restart keepalived.service
+systemctl enable --now keepalived.service
+systemctl status httpd
+systemctl status keepalived.service
+
+# PRUEBAS
+ping 192.168.100.200
+abrir la pagina web
+apagar una de las maquinas y chequear tanto la pagina como el ping
+
+
+# -------------------------
+# ❗ NOTAS, ERRORES Y SOLUCIONES (Práctica 3)
+# -------------------------
+
+❗ Nota 1 — KeepAlived no arranca  
+- Solución: Revisar permisos de /etc/keepalived/keepalived.conf y usuario root
+
+❗ Nota 2 — IP Virtual no cambia con failover  
+- Solución: Verificar priority y estado MASTER/BACKUP en cada servidor
+
+❗ Nota 3 — Apache no responde  
+- Solución: Revisar firewall, puerto 80 abierto y servicio activo
+
+❗ Nota 4 — Ping no constante  
+- Solución: Confirmar interfaz correcta (ens33) y que no haya conflictos de IP
+
+
+# -------------------------
+# 📘 TÉRMINOS IMPORTANTES (Práctica 3)
+# -------------------------
+
+KeepAlived: Herramienta de HA que gestiona IP flotante con VRRP.  
+VRRP: Virtual Router Redundancy Protocol.  
+MASTER/BACKUP: Roles de nodos en HA.  
+IP Virtual: IP compartida que asegura disponibilidad del servicio.  
+Failover: Cambio automático de servicio al nodo secundario en caso de fallo.  
+NIC: Interfaz de red utilizada para IP flotante.
+
+
+---- - Version 1 - -----
+
 ============================================
 
 Comandos usados practica 1
@@ -227,4 +512,5 @@ ping 192.168.100.200
 abrir la pagina web
 
 apagar una de las maquinas y chequear tanto la pagina como el ping para comprobar
+
 la disponibilidad del servidor.
